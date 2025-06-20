@@ -2,12 +2,10 @@ import React from "react";
 import styled from "styled-components";
 import Header from "../Header/Header";
 import Scrollbar from "../Scrollbar/Scrollbar";
-import { MAX_UUID } from "../../../lib/constants";
-import UUIDDisplay from "../UUIDDisplay/UUIDDisplay";
-import SearchWidget from "../SearchWidget/SearchWidget";
-import FavoritesWidget from "../FavoritesWidget";
-import { indexToUUID, uuidToIndex } from "../../../lib/uuidTools";
-import JokeOverlay from "../JokeOverlay/JokeOverlay";
+import PasswordDisplay from "../PasswordDisplay";
+import LengthInput from "../LengthInput";
+import { ASCII_COUNT, indexToPassword } from "../../../lib/passwordTools";
+
 const Wrapper = styled.div`
   display: flex;
   flex-direction: row;
@@ -40,51 +38,20 @@ function App() {
   const [isAnimating, setIsAnimating] = React.useState(false);
   const [targetPosition, setTargetPosition] = React.useState(null);
   const [itemsToShow, setItemsToShow] = React.useState(40);
-  const [search, setSearch] = React.useState("");
-  const [searchDisplayed, setSearchDisplayed] = React.useState(false);
-  const [showFavorites, _setShowFavorites] = React.useState(false);
+  const [length, setLength] = React.useState(8);
   const animationRef = React.useRef(null);
 
-  const [favedUUIDs, setFavedUUIDs] = React.useState(
-    localStorage.getItem("favedUUIDs")
-      ? JSON.parse(localStorage.getItem("favedUUIDs"))
-      : {}
-  );
-
-  const setShowFavorites = React.useCallback(
-    (value) => {
-      setVirtualPosition(0n);
-      _setShowFavorites(value);
-    },
-    [_setShowFavorites]
-  );
+  const maxIndex = React.useMemo(() => {
+    return ASCII_COUNT ** BigInt(length);
+  }, [length]);
 
   const MAX_POSITION = React.useMemo(() => {
-    if (showFavorites) {
-      const itemsToShowBig = BigInt(itemsToShow);
-      const favedUUIDsLength = BigInt(Object.keys(favedUUIDs).length);
-      if (favedUUIDsLength > itemsToShowBig) {
-        return favedUUIDsLength - itemsToShowBig;
-      }
-      return 0n;
-    } else return MAX_UUID - BigInt(itemsToShow);
-  }, [itemsToShow, showFavorites, favedUUIDs]);
-
-  const toggleFavedUUID = (uuid) => {
-    setFavedUUIDs((prev) => {
-      const prevValue = prev[uuid] || false;
-      const newValue = !prevValue;
-      const newFavedUUIDs = { ...prev };
-      if (newValue) {
-        newFavedUUIDs[uuid] = true;
-      } else {
-        delete newFavedUUIDs[uuid];
-      }
-
-      localStorage.setItem("favedUUIDs", JSON.stringify(newFavedUUIDs));
-      return newFavedUUIDs;
-    });
-  };
+    const itemsToShowBig = BigInt(itemsToShow);
+    if (maxIndex > itemsToShowBig) {
+      return maxIndex - itemsToShowBig;
+    }
+    return 0n;
+  }, [itemsToShow, maxIndex]);
 
   const animateToPosition = React.useCallback(
     (targetPos) => {
@@ -101,16 +68,13 @@ function App() {
       const duration = 300;
 
       const animate = () => {
-        // we can't use the currentTime provided by animate because it's not guaranteed
-        // to be after startTime!
         const currentTime = performance.now();
         const elapsed = currentTime - startTime;
         const progress = Math.min(elapsed / duration, 1);
         const easeProgress = 1 - Math.pow(1 - progress, 4);
         const currentPos =
           startPosition +
-          ((targetPosition - startPosition) *
-            BigInt(Math.floor(easeProgress * 1000))) /
+          ((targetPosition - startPosition) * BigInt(Math.floor(easeProgress * 1000))) /
             1000n;
 
         setVirtualPosition(currentPos);
@@ -132,118 +96,35 @@ function App() {
         }
       };
     }
-    // we intentionally want to save off an "old" copy of virtual position
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAnimating, targetPosition]);
+  }, [isAnimating, targetPosition, virtualPosition]);
 
-  const displayedUUIDs = React.useMemo(() => {
-    if (showFavorites) {
-      const allUUIDs = Object.keys(favedUUIDs)
-        .map((uuid) => {
-          const index = uuidToIndex(uuid);
-          if (index === null) {
-            console.error("no index", uuid);
-            return null;
-          }
-          return {
-            index,
-            uuid,
-          };
-        })
-        .filter((item) => item !== null)
-        .sort((a, b) => {
-          const delta = a.index - b.index;
-          if (delta < 0n) return -1;
-          if (delta > 0n) return 1;
-          return 0;
-        });
-      let startIndex = virtualPosition;
-      let endIndex = startIndex + BigInt(itemsToShow);
-      if (startIndex > MAX_POSITION) {
-        startIndex = MAX_POSITION;
-      }
-      return allUUIDs.slice(Number(startIndex), Number(endIndex));
-    }
+  const displayedPasswords = React.useMemo(() => {
     return Array.from({ length: itemsToShow }, (_, i) => {
       const index = virtualPosition + BigInt(i);
-      if (index < 0n) {
+      if (index < 0n || index >= maxIndex) {
         return null;
       }
-      if (index > MAX_UUID) {
-        return null;
-      }
-      const uuid = indexToUUID(index);
-      if (!uuid) {
-        console.error("no uuid", index);
-        return null;
-      }
-      return { index, uuid };
-    });
-  }, [virtualPosition, itemsToShow, showFavorites, favedUUIDs, MAX_POSITION]);
-
-  const firstUuid = React.useMemo(() => {
-    if (showFavorites) {
-      return Object.keys(favedUUIDs)[0];
-    }
-    return indexToUUID(virtualPosition);
-  }, [virtualPosition, showFavorites, favedUUIDs]);
-
-  const [browserHash, setBrowserHash] = React.useState(null);
-
-  React.useEffect(() => {
-    setBrowserHash(window.location.hash);
-    const handleHashChange = () => {
-      setBrowserHash(window.location.hash);
-    };
-    window.addEventListener("hashchange", handleHashChange);
-    return () => {
-      window.removeEventListener("hashchange", handleHashChange);
-    };
-  }, []);
-
-  const hashContainsTheo = React.useMemo(() => {
-    if (!browserHash) {
-      return false;
-    }
-    const hash = browserHash.slice(1);
-    return hash.includes("theo");
-  }, [browserHash]);
+      const password = indexToPassword(index, length);
+      return { index, password };
+    }).filter(Boolean);
+  }, [virtualPosition, itemsToShow, length, maxIndex]);
 
   return (
     <>
-      {hashContainsTheo && <JokeOverlay firstUuid={firstUuid} />}
-      <SearchWidget
-        animateToPosition={animateToPosition}
-        virtualPosition={virtualPosition}
-        setVirtualPosition={setVirtualPosition}
-        search={search}
-        setSearch={setSearch}
-        searchDisplayed={searchDisplayed}
-        setSearchDisplayed={setSearchDisplayed}
-        displayedUUIDs={displayedUUIDs}
-        MAX_POSITION={MAX_POSITION}
-      />
-      <FavoritesWidget
-        setShowFavorites={setShowFavorites}
-        isShowingFavorites={showFavorites}
-      />
+      <LengthInput length={length} setLength={setLength} />
       <Wrapper>
         <HeaderAndContent>
           <Header />
           <Content>
-            <UUIDDisplay
+            <PasswordDisplay
               itemsToShow={itemsToShow}
               setItemsToShow={setItemsToShow}
               virtualPosition={virtualPosition}
               setVirtualPosition={setVirtualPosition}
-              favedUUIDs={favedUUIDs}
-              toggleFavedUUID={toggleFavedUUID}
               isAnimating={isAnimating}
               MAX_POSITION={MAX_POSITION}
               animateToPosition={animateToPosition}
-              search={search}
-              searchDisplayed={searchDisplayed}
-              displayedUUIDs={displayedUUIDs}
+              displayedPasswords={displayedPasswords}
             />
           </Content>
         </HeaderAndContent>
